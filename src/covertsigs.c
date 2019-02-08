@@ -6,7 +6,7 @@
 #include <math.h>
 #include <sys/time.h>
 
-#define TIMESLICE 20000
+#define TIMESLICE 5000
 
 #ifdef SINGLE
 int SINGLEMODE = 1;
