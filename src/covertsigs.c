@@ -51,7 +51,7 @@ int main()
     sa.sa_flags = 0;
     sa.sa_flags = SA_RESTART;
 
-    printf("% covertsigs\nOwn PID:%d\n", getpid());
+    printf("%% covertsigs\nOwn PID:%d\n", getpid());
     scanf("%d", &pid2);
     getchar(); //remove"\n"
 
