@@ -3,6 +3,10 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+#include <sys/time.h>
+
+#define TIMESLICE 20000
 
 #ifdef SINGLE
 int SINGLEMODE = 1;
@@ -10,21 +14,26 @@ int SINGLEMODE = 1;
 int SINGLEMODE = 0;
 #endif
 
-int bitcount = 0;
-char r_ch = 0;
-char r_str[80] = {0};
-int is_first_letter = 1; //received message flag,0:no,1:yes
 int pid2;
-struct sigaction sa;
-char receive_str[81]={0};
-int receive_str_index=1;//receive_str[0]='!'or'?'
+int bitcount = 0;
 int is_busy;
+char received_char = 0;
+char received_str[81] = {0};
+int received_str_index = 1; //received_str[0]='!'or'?'
+char send_str[81];
+long int send_time_array[81][8];
+long int last_receive_time, current_receive_time;
+int is_second_signal; //1---1
+struct sigaction sa;
+struct itimerval it_new_value, it_old_value;
 
-
-void double_sig_handler(int signum);
-void single_mode();
-void double_mode();
-
+void doubleSigHandler(int signum);
+void singleSigHandler(int signum);
+void singleMode();
+void doubleMode();
+void sendSignalSingle();
+long int getCurrentUsec();
+void convertStr2TimeArray();
 
 int main()
 {
@@ -38,70 +47,61 @@ int main()
 
     if (SINGLEMODE)
     {
-        single_mode();
+        singleMode();
     }
     else
     {
-        double_mode();
+        doubleMode();
     }
 }
 
-void double_sig_handler(int signum)
+void singleMode()
 {
-    is_busy=1;
-    if (signum == SIGUSR1)
+    sa.sa_handler = singleSigHandler;
+    if ((sigaction(SIGUSR1, &sa, NULL) < 0))
     {
-        r_ch = r_ch << 1;
-        bitcount++;
+        printf("Sigaction error!\n");
+        exit(1);
     }
-    if (signum == SIGUSR2)
+    received_str[0] = '!';
+    while (1)
     {
-        r_ch = (r_ch << 1) + 1;
-        bitcount++;
-    }
-    if (bitcount == 8)
-    {
-        if((r_ch<32||r_ch>127)&&r_ch!='\n'){ //is not ascii and not '\n'
-            receive_str[0]='?';
-        } 
-        receive_str[receive_str_index++]=r_ch;
-        if (r_ch == '\n')
+        if (is_busy)
         {
-            is_first_letter = 1;
-            int i;
-            for(i=0;i<receive_str_index;i++){
-                printf("%c",receive_str[i]);
-            }
-            memset(receive_str,0,81);
-            receive_str[0]='!';
-            receive_str_index=1;
-            is_busy=0;
+            while (1)
+                ;
         }
-        bitcount = 0;
-        r_ch = 0;
+        memset(send_str, 0, 81);
+        fgets(send_str, 83, stdin);
+        if (send_str[0] == '.')
+        {
+            exit(0);
+        }
+        memset(send_time_array, -1, 81);
+        convertStr2TimeArray();
+        sendSignalSingle();
     }
 }
 
-void single_mode()
+void doubleMode()
 {
-}
-
-void double_mode()
-{
-    sa.sa_handler = double_sig_handler;
-    if ((sigaction(SIGUSR1, &sa, NULL) < 0)||
-        (sigaction(SIGUSR2,&sa,NULL)<0)) {
-		printf("Sigaction error!\n");
-		exit(1);
-	}
+    sa.sa_handler = doubleSigHandler;
+    if ((sigaction(SIGUSR1, &sa, NULL) < 0) ||
+        (sigaction(SIGUSR2, &sa, NULL) < 0))
+    {
+        printf("Sigaction error!\n");
+        exit(1);
+    }
 
     char c;
 
-    receive_str[0]='!';
+    received_str[0] = '!';
     while (1)
     {
-        if(is_busy){
-            while(1);
+        if (is_busy)
+        {
+            while (1)
+                ;
         }
         char send_str[81] = {0};
         fgets(send_str, 83, stdin);
@@ -129,4 +129,155 @@ void double_mode()
             }
         }
     }
+}
+
+void singleSigHandler(int signo)
+{
+    if (signo == SIGUSR1)
+    {
+        //printf("get%d\n",t_count++);
+        last_receive_time = current_receive_time;
+        current_receive_time = getCurrentUsec();
+        if (is_second_signal)
+        {
+            long int interval = current_receive_time - last_receive_time;
+
+            // printf("last:%ld\n",last_receive_time);
+            // printf("current:%ld\n",current_receive_time);
+            // printf("interval:%ld\n",interval);
+            // printf("round:%lf\n",round((double)(interval) / TIMESLICE));
+            if (round((double)(interval) / TIMESLICE) == 2.0)
+            {
+                received_char = received_char << 1;
+                bitcount++;
+                // printf("0");
+                // fflush(stdout);
+            }
+            else if (round((double)(interval) / TIMESLICE) == 3.0)
+            {
+                received_char = (received_char << 1) + 1;
+                bitcount++;
+                // printf("1");
+                // fflush(stdout);
+            }
+            if (bitcount == 8)
+            {
+                if ((received_char < 32 || received_char > 127) && received_char != '\n')
+                { //is not ascii and not '\n'
+                    received_str[0] = '?';
+                }
+                received_str[received_str_index++] = received_char;
+                if (received_char == '\n')
+                {
+                    int i;
+                    for (i = 0; i < received_str_index; i++)
+                    {
+                        printf("%c", received_str[i]);
+                    }
+                    memset(received_str, 0, 81);
+                    received_str[0] = '!';
+                    received_str_index = 1;
+                    is_busy = 0;
+                }
+                bitcount = 0;
+                received_char = 0;
+            }
+        }
+        is_second_signal = ~is_second_signal;
+    }
+}
+
+void doubleSigHandler(int signum)
+{
+    is_busy = 1;
+    if (signum == SIGUSR1)
+    {
+        received_char = received_char << 1;
+        bitcount++;
+    }
+    if (signum == SIGUSR2)
+    {
+        received_char = (received_char << 1) + 1;
+        bitcount++;
+    }
+    if (bitcount == 8)
+    {
+        if ((received_char < 32 || received_char > 127) && received_char != '\n')
+        { //is not ascii and not '\n'
+            received_str[0] = '?';
+        }
+        received_str[received_str_index++] = received_char;
+        if (received_char == '\n')
+        {
+            int i;
+            for (i = 0; i < received_str_index; i++)
+            {
+                printf("%c", received_str[i]);
+            }
+            memset(received_str, 0, 81);
+            received_str[0] = '!';
+            received_str_index = 1;
+            is_busy = 0;
+        }
+        bitcount = 0;
+        received_char = 0;
+    }
+}
+
+void sendSignalSingle()
+{
+    int i = 0, j = 0;
+    for (i = 0; i < strlen(send_str); i++)
+    {
+        for (j = 0; j < 8; j++)
+        {
+            if (send_time_array[i][j] == -1)
+            {
+                return;
+            }
+
+            if (kill(pid2, SIGUSR1) == -1)
+            {
+                printf("Error: can't send signal to process %d\n", pid2);
+                exit(1);
+            }
+            usleep(send_time_array[i][j]);
+            if (kill(pid2, SIGUSR1) == -1)
+            {
+                printf("Error: can't send signal to process %d\n", pid2);
+                exit(1);
+            }
+            usleep(1);
+        }
+    }
+}
+
+void convertStr2TimeArray()
+{
+    int i;
+    for (i = 0; i < strlen(send_str); i++)
+    {
+        char ch = send_str[i];
+        int j;
+        for (j = 7; j >= 0; j--)
+        {
+            int bit = (ch & (0x01 << j)) == 0 ? 0 : 1;
+            if (bit)
+            {
+                send_time_array[i][7 - j] = TIMESLICE * 3;
+            }
+            else
+            {
+                send_time_array[i][7 - j] = TIMESLICE * 2;
+            }
+        }
+    }
+}
+
+long int getCurrentUsec()
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    long int now = tv.tv_sec * 1000000 + tv.tv_usec;
+    return now;
 }
